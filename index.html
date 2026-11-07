@@ -48,8 +48,12 @@
   #intro.gone{transition:opacity 1.2s;opacity:0}
   @keyframes rise{from{opacity:0;filter:blur(8px);transform:translateY(8px)}to{opacity:1;filter:none;transform:none}}
   @keyframes breathe{from{opacity:1}to{opacity:.45}}
-  .caption{top:21%;font-size:clamp(28px,7vw,46px);font-weight:500;line-height:1.15;animation:say 5s 1s both}
-  @keyframes say{0%{opacity:0;filter:blur(10px);transform:translateY(10px)}15%,78%{opacity:1;filter:none;transform:none}100%{opacity:0;filter:blur(6px)}}
+  #captions{position:fixed;left:16px;right:16px;top:17%;display:flex;flex-direction:column;align-items:center;gap:12px;pointer-events:none}
+  .caption{text-align:center;font-size:clamp(26px,6.6vw,44px);font-weight:500;line-height:1.15;
+    text-shadow:0 0 18px rgba(200,170,255,.55),0 0 2px rgba(255,255,255,.4);
+    animation:rise 1.4s backwards;transition:opacity .8s,transform .8s}
+  .caption.old{opacity:.5;transform:scale(.82)}
+  .caption.out{opacity:0}
   #line2{font-size:clamp(21px,5.4vw,32px);font-weight:500;opacity:0}
   #line2.on{animation:rise 2.6s forwards}
   #again{bottom:6%;font-size:18px;opacity:0}
@@ -77,6 +81,7 @@
 <div id="vignette" class="layer"></div>
 
 <div id="intro" class="text"><p class="l1">этот сад для тебя</p><p class="l2">коснись земли</p></div>
+<div id="captions"></div>
 <div id="line2" class="text"></div>
 <div id="again" class="text">можно сажать ещё</div>
 <div id="said" class="sr" role="status"></div>
@@ -119,7 +124,8 @@ const $ = id => document.getElementById(id);
 const scene = $('scene'), defs = scene.querySelector('defs'), fx = $('fx'), ctx = fx.getContext('2d');
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
-let W, H, HZ, n = 0, done = false, lastCaption = -1e9;
+let W, H, HZ, given = 0, shown = 0, lastShow = -1e9;
+const pending = [];   // время касаний, чьи фразы ещё ждут показа
 const blooms = [], roots = [], flies = [], sparks = [];
 let textPts = null;
 
@@ -301,19 +307,32 @@ function textTargets(str, cy) {
 }
 
 // ---------- сюжет ----------
-function caption(text) {
-  document.querySelectorAll('.caption').forEach(o => o.remove());
+// На небе живут три последние фразы: новая снизу, старые бледнеют, самая старая уходит.
+function showNext() {
+  const box = $('captions'), live = [...box.querySelectorAll('.caption:not(.out)')];
+  live.forEach(c => c.classList.add('old'));
+  if (live.length >= 3) { live[0].classList.add('out'); setTimeout(() => live[0].remove(), 800); }
   const c = document.createElement('div');
-  c.className = 'text caption';
-  c.textContent = text;
-  c.addEventListener('animationend', () => c.remove());
-  document.body.appendChild(c);
-  $('said').textContent = text;
+  c.className = 'caption';
+  c.textContent = PHRASES[shown];
+  box.appendChild(c);
+  $('said').textContent = PHRASES[shown];
+  shown++;
+  lastShow = performance.now();
+  $('aurora').style.opacity = (shown / PHRASES.length) * .85;
+  $('moon').style.opacity = 1 - (shown / PHRASES.length) * .6;
+  if (shown === PHRASES.length) setTimeout(finale, 6000);
 }
+// фраза выходит через 1 c после своего цветка (когда он раскрылся) и не раньше чем через 1.8 c после прошлой
+setInterval(() => {
+  const now = performance.now();
+  if (pending.length && now >= pending[0] + 1000 && now - lastShow >= 1800) { pending.shift(); showNext(); }
+}, 100);
 
 async function finale() {
   $('aurora').style.opacity = 1;
   $('moon').style.opacity = .25;
+  document.querySelectorAll('.caption').forEach(c => c.classList.add('out'));
   // луг расползается от её цветов: каждый новый растёт рядом с уже выросшим и чуть позже него
   for (let i = 0; i < 32; i++) {
     const seed = roots[Math.floor(rnd(0, roots.length))], side = Math.random() < .5 ? -1 : 1;
@@ -345,23 +364,15 @@ addEventListener('pointerdown', e => {
   initAudio();
   if (AC && AC.state === 'suspended') AC.resume();
   $('intro').classList.add('gone');
-  const now = performance.now();
-  // новая подпись только когда прошлую успели прочитать: если тыкает быстро, фразы не теряются, а ждут следующего цветка
-  const speak = !done && now - lastCaption > 4600;
-  plant(e.clientX, e.clientY, 0, speak ? MELODY[n % MELODY.length] : null);
-  if (!speak) return;
-  lastCaption = now;
-  caption(PHRASES[n]);
-  n++;
-  $('aurora').style.opacity = (n / PHRASES.length) * .85;
-  $('moon').style.opacity = 1 - (n / PHRASES.length) * .6;
-  if (n === PHRASES.length) { done = true; setTimeout(finale, 6000); }
+  const hasPhrase = given < PHRASES.length;
+  plant(e.clientX, e.clientY, 0, hasPhrase ? MELODY[given % MELODY.length] : null);
+  if (hasPhrase) { pending.push(performance.now()); given++; }
 });
 
-// Самопроверка: открой с #demo в конце адреса, и сад вырастет сам.
-if (location.hash === '#demo')
+// Самопроверка: #demo в конце адреса, и сад вырастет сам; #fast — то же, но все касания за 2 секунды.
+if (location.hash === '#demo' || location.hash === '#fast')
   PHRASES.forEach((_, i) => setTimeout(() => dispatchEvent(new PointerEvent('pointerdown',
-    { clientX: rnd(40, W - 40), clientY: rnd(HZ + 40, H - 20) })), 1500 + i * 4800));
+    { clientX: rnd(40, W - 40), clientY: rnd(HZ + 40, H - 20) })), 1500 + i * (location.hash === '#fast' ? 220 : 4800)));
 </script>
 </body>
 </html>
